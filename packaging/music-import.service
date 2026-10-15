@@ -1,0 +1,20 @@
+[Unit]
+Description=music-import - web frontend for the music import pipeline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h expands to the user's home directory. Adjust the project path if you
+# cloned the repo somewhere other than ~/code/music-import.
+WorkingDirectory=%h/code/music-import
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Optional config file (see packaging/music-import.env.example).
+EnvironmentFile=-%h/.config/music-import/music-import.env
+ExecStart=%h/.local/bin/uv run --project %h/code/music-import music-import
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

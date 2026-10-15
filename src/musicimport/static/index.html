@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>music-import</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+  :root { --bg:#12151a; --panel:#1a1f27; --line:#2a313c; --fg:#d7dde5; --dim:#8792a3;
+          --accent:#63b3ed; --good:#68d391; --warn:#f6c177; --bad:#f28b82; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { padding:12px 18px; border-bottom:1px solid var(--line); font-weight:600;
+           letter-spacing:.04em; display:flex; gap:12px; align-items:center; }
+  header .sub { color:var(--dim); font-weight:400; }
+  .layout { display:grid; grid-template-columns:minmax(320px,420px) 1fr; height:calc(100vh - 49px); }
+  #list { border-right:1px solid var(--line); overflow:auto; }
+  .rel { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .rel:hover { background:#1e242d; }
+  .rel.active { background:#232b36; border-left:3px solid var(--accent); padding-left:11px; }
+  .rel .name { font-weight:600; word-break:break-word; }
+  .rel .meta { color:var(--dim); font-size:12px; margin-top:3px; }
+  .badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px;
+           border:1px solid var(--line); color:var(--dim); }
+  .badge.import { color:var(--good); border-color:#2f5138; }
+  .badge.split, .badge.convert_wv, .badge.convert_ape { color:var(--accent); border-color:#26445e; }
+  .badge.manual, .badge.skip { color:var(--warn); border-color:#5c4a26; }
+  main { overflow:auto; padding:18px 22px; }
+  h2 { margin:4px 0 2px; font-size:16px; }
+  .muted { color:var(--dim); }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; }
+  button { background:#222a35; color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:7px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  pre#log { background:#0d1015; border:1px solid var(--line); border-radius:6px;
+            padding:12px; min-height:120px; max-height:42vh; overflow:auto; white-space:pre-wrap;
+            color:#b8c2d0; font-size:12px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:6px;
+           padding:12px 14px; margin:12px 0; }
+  .verdict { font-weight:600; }
+  .verdict.TRANSCODE, .verdict.SUSPECT { color:var(--bad); }
+  .verdict.CHECK { color:var(--warn); }
+  .verdict.CLEAN { color:var(--good); }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  td, th { text-align:left; padding:3px 8px; border-bottom:1px solid var(--line); }
+  #termwrap { display:none; margin-top:12px; }
+  #term { height:340px; background:#0d1015; border:1px solid var(--line); border-radius:6px; padding:6px; }
+  .hint { color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+<header>music-import <span class="sub">— scan · diagnose · split · tag · import</span></header>
+<div class="layout">
+  <aside id="list"><div class="muted" style="padding:14px">Loading…</div></aside>
+  <main id="detail"><div class="muted">Select a release on the left.</div></main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let current = null, term = null, fit = null, ws = null;
+
+const fmt = n => {
+  if (n == null) return "";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0;
+  while (n >= 1024 && i < u.length-1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + " " + u[i];
+};
+const esc = s => (s||"").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function loadReleases() {
+  const list = $("#list");
+  try {
+    const rels = await (await fetch("/api/releases")).json();
+    if (!rels.length) { list.innerHTML = '<div class="muted" style="padding:14px">No releases found.</div>'; return; }
+    list.innerHTML = rels.map(r => `
+      <div class="rel" data-path="${esc(r.path)}">
+        <div class="name">${esc(r.name)}</div>
+        <div class="meta">
+          <span class="badge ${r.action}">${esc(r.label)}</span>
+          &nbsp;${r.file_count} files · ${fmt(r.size_bytes)}
+        </div>
+      </div>`).join("");
+    list.querySelectorAll(".rel").forEach(el =>
+      el.addEventListener("click", () => select(el.dataset.path, el)));
+  } catch (e) {
+    list.innerHTML = `<div class="muted" style="padding:14px">Error: ${esc(String(e))}</div>`;
+  }
+}
+
+function select(path, el) {
+  document.querySelectorAll(".rel").forEach(x => x.classList.remove("active"));
+  if (el) el.classList.add("active");
+  current = path;
+  renderDetail(path);
+}
+
+async function renderDetail(path) {
+  const d = $("#detail");
+  d.innerHTML = '<div class="muted">Loading…</div>';
+  const r = await (await fetch("/api/release?path=" + encodeURIComponent(path))).json();
+  cancelTerminal();
+  d.innerHTML = `
+    <h2>${esc(r.name)}</h2>
+    <div class="muted">${esc(r.path)}</div>
+    <div class="panel">
+      <span class="badge ${r.action}">${esc(r.label)}</span>
+      &nbsp; ${r.file_count} files · ${fmt(r.size_bytes)}
+      <div class="hint" style="margin-top:6px">Proposed: ${esc(r.action_label)}</div>
+    </div>
+    <div class="actions">
+      <button data-act="diagnose">Bitrate / transcode check</button>
+      <button data-act="hires">Hi-res check</button>
+      <button data-act="tags-dry">Clean tags (dry run)</button>
+      <button data-act="tags-apply" disabled>Apply tag cleanup</button>
+      ${r.action === "split" ? '<button data-act="split">Split into tracks</button>' : ""}
+      ${r.action === "convert_ape" || r.action === "convert_wv" ? '<button data-act="convert">Convert + split</button>' : ""}
+      <button data-act="import">Import with beets</button>
+    </div>
+    <div id="extra"></div>
+    <pre id="log">Ready.</pre>
+    <div id="termwrap"><div id="term"></div>
+      <div class="hint">Interactive beets import. Type in the terminal below.</div></div>`;
+
+  d.querySelectorAll("button[data-act]").forEach(b =>
+    b.addEventListener("click", () => act(b.dataset.act, b)));
+}
+
+function log(msg) {
+  const el = $("#log");
+  el.textContent += (el.textContent === "Ready." ? "" : "\n") + msg;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function runJob(url, body) {
+  const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"},
+                                body: JSON.stringify(body)});
+  if (!res.ok) { log("ERROR " + res.status + ": " + await res.text()); return; }
+  const {job} = await res.json();
+  log("job " + job + " started…");
+  return await new Promise(resolve => {
+    const es = new EventSource(`/api/jobs/${job}/stream`);
+    es.onmessage = ev => { try { log(JSON.parse(ev.data)); } catch { log(ev.data); } };
+    es.addEventListener("done", ev => {
+      log("── done ──");
+      es.close();
+      let j = null;
+      try {
+        j = JSON.parse(ev.data);
+        if (!j.ok) log("FAILED: " + (j.error || "unknown"));
+      } catch {}
+      resolve(j);
+    });
+    es.onerror = () => { log("(stream closed)"); es.close(); resolve(null); };
+  });
+}
+
+async function act(kind, btn) {
+  const path = current;
+  if (kind === "hires") {
+    const {info} = await (await fetch("/api/release/hires",
+      {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path})})).json();
+    const x = $("#extra");
+    if (!info) { x.innerHTML = '<div class="panel muted">Not hi-res (≤48 kHz).</div>'; return; }
+    x.innerHTML = `<div class="panel">
+      <b>Hi-res detected</b> — ${info.sample_rates.map(s=>s/1000+" kHz").join(", ")}
+      / ${info.bit_depths.join(", ")}-bit · ${info.files} files
+      <div class="hint">est. bitrate ${info.est_kbps} kbps · downsample to ${info.target}
+      reclaims ~${fmt(info.est_reclaim_bytes)}</div>
+      <button id="ds">Downsample to 48/24 (staged)</button></div>`;
+    $("#ds").addEventListener("click", async () => {
+      $("#ds").disabled = true;
+      await runJob("/api/release/downsample", {path});
+    });
+    return;
+  }
+  if (kind === "tags-dry") {
+    const res = await (await fetch("/api/release/tags/dry-run",
+      {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path})})).json();
+    const x = $("#extra");
+    const rows = Object.entries(res.plan).map(([f,t]) =>
+      `<tr><td>${esc(f)}</td><td>${esc(t.join(", "))}</td></tr>`).join("");
+    x.innerHTML = `<div class="panel">
+      <b>${res.total_tags}</b> junk tags across <b>${res.files}</b> files
+      ${rows ? `<table><tr><th>file</th><th>would remove</th></tr>${rows}</table>` : '<div class="hint">Nothing to remove.</div>'}
+    </div>`;
+    const applyBtn = document.querySelector('button[data-act="tags-apply"]');
+    if (applyBtn) applyBtn.disabled = res.files === 0;
+    return;
+  }
+  if (kind === "import") {
+    openTerminal(path);
+    return;
+  }
+  const urls = {diagnose:"/api/release/diagnose", split:"/api/release/split",
+                convert:"/api/release/convert", "tags-apply":"/api/release/tags/clean"};
+  btn.disabled = true;
+  const job = await runJob(urls[kind], {path});
+  btn.disabled = false;
+  if (kind === "diagnose" && job?.result?.albums) renderDiagnostics(job.result.albums);
+  if (kind === "tags-apply") act("tags-dry");
+  if (kind === "split" || kind === "convert") renderDetail(path);
+}
+
+function renderDiagnostics(albums) {
+  const x = $("#extra");
+  if (!albums.length) { x.innerHTML = '<div class="panel muted">No lossless tracks to audit.</div>'; return; }
+  x.innerHTML = albums.map(a => `
+    <div class="panel">
+      <span class="verdict ${a.status}">${a.status}</span>
+      &nbsp;${a.flagged}/${a.files} flagged
+      ${a.cutoff_hz ? `· cutoff ~${(a.cutoff_hz/1000).toFixed(1)} kHz` : ""}
+      ${a.sample_rate ? `· ${(a.sample_rate/1000)} kHz` : ""}
+      ${a.codec_guess ? `· ${esc(a.codec_guess)}` : ""}
+      <div class="hint">${esc(a.folder)}</div>
+      ${a.tracks.filter(t => t.verdict && !["GENUINE","INCONCLUSIVE"].includes(t.verdict)).length
+        ? `<table><tr><th>verdict</th><th>conf</th><th>file</th></tr>${
+            a.tracks.filter(t => t.verdict && !["GENUINE","INCONCLUSIVE"].includes(t.verdict))
+              .map(t => `<tr><td>${esc(t.verdict)}</td><td>${t.confidence ?? "-"}</td><td>${esc(t.file)}</td></tr>`).join("")
+          }</table>` : ""}
+    </div>`).join("");
+}
+
+function cancelTerminal() {
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+  if (term) { term.dispose(); term = null; }
+}
+
+function openTerminal(path) {
+  const wrap = $("#termwrap");
+  wrap.style.display = "block";
+  cancelTerminal();
+  term = new Terminal({fontSize: 13, theme: {background:"#0d1015"}, convertEol: true});
+  fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open($("#term"));
+  fit.fit();
+  term.focus();
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/beets?path=${encodeURIComponent(path)}`);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({type:"resize", rows:term.rows, cols:term.cols}));
+  };
+  ws.onmessage = ev => term.write(ev.data);
+  ws.onclose = () => term.write("\r\n\x1b[2m[ session ended ]\x1b[0m\r\n");
+  term.onData(d => { if (ws?.readyState === 1) ws.send(JSON.stringify({type:"input", data:d})); });
+  term.onResize(({rows, cols}) => {
+    if (ws?.readyState === 1) ws.send(JSON.stringify({type:"resize", rows, cols}));
+  });
+  window.addEventListener("resize", () => fit && fit.fit(), {once:true});
+}
+
+loadReleases();
+</script>
+</body>
+</html>

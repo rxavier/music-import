@@ -1,0 +1,28 @@
+[project]
+name = "music-import"
+version = "0.1.0"
+description = "Web frontend for the music-import pipeline: scan releases, split/convert images, screen for fake lossless, clean tags, and drive beets import."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "beets==2.11.0",
+    "mutagen>=1.47",
+    "Pillow>=11",
+    "pyacoustid>=1.3",
+    "requests>=2.32",
+]
+
+[project.scripts]
+music-import = "musicimport.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/musicimport"]
+
+[tool.uv]
+package = true
