@@ -52,7 +52,7 @@ All paths and tool locations are environment-overridable; see
 | --- | --- | --- |
 | `MUSIC_IMPORT_MEDIA` | `/media` | media tree root |
 | `MUSIC_IMPORT_HOST` / `MUSIC_IMPORT_PORT` | `127.0.0.1` / `8318` | web bind |
-| `MUSIC_IMPORT_LIDARR` | `<media>/downloads/torrents/complete/lidarr` | torrent releases |
+| `MUSIC_IMPORT_TORRENTS` | `<media>/downloads/torrents/complete` | torrent releases (descends into `lidarr/`) |
 | `MUSIC_IMPORT_SOULSEEK` | `<media>/downloads/soulseek/complete` | Soulseek releases |
 | `MUSIC_IMPORT_MUSIC` | `<media>/music` | beets library |
 | `MUSIC_IMPORT_FLACCHECK` / `MUSIC_IMPORT_BEET` | `flaccheck` / `beet` | tool paths |

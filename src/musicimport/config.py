@@ -19,9 +19,12 @@ def _env_path(name: str, default: str) -> Path:
 MEDIA = _env_path("MUSIC_IMPORT_MEDIA", "/media")
 DOWNLOADS = MEDIA / "downloads"
 
-# Release sources, in scan order.
+# Release sources, in scan order. Each is a "complete" root; the scanner walks
+# it recursively and treats any folder that directly contains audio as a
+# release (descending transparently through containers like lidarr/ and
+# artwork/scans dirs). See scan.py.
 SOURCE_DIRS: tuple[Path, ...] = (
-    _env_path("MUSIC_IMPORT_LIDARR", str(DOWNLOADS / "torrents" / "complete" / "lidarr")),
+    _env_path("MUSIC_IMPORT_TORRENTS", str(DOWNLOADS / "torrents" / "complete")),
     _env_path("MUSIC_IMPORT_SOULSEEK", str(DOWNLOADS / "soulseek" / "complete")),
 )
 
